@@ -1,9 +1,11 @@
 #!/bin/bash
+set -euo pipefail
+
 sleep 3
 
 ### config
 
-# the max command length vclient can accept
+# the max command length vclient can accept (see vcontrold PR #135)
 MAX_LENGTH=512
 
 # the usb device
@@ -12,98 +14,93 @@ echo "Device ${USB_DEVICE}"
 
 ### execution
 
-# run vcontrold. This doesn't override the log file from the config on purpose. This way, if we change the file in the config, we can decide to keep the file.
+# run vcontrold with the config; logging is controlled by /config/vcontrold.xml
 vcontrold -x /config/vcontrold.xml -P /tmp/vcontrold.pid
 
-# remove log file to avoid unlimited log growth.
-rm "/log/deleteme.log"
-
 status=$?
-pid=$(pidof vcontrold)
+pid=$(pidof vcontrold || true)
 
-
-# Function to execute vclient command with the current sublist
-execute_vclient() {
-    local current_list=$1
-    local response
-
-    # short format with -j. make sure to init merged_json as "{}".
-    response=$(vclient -h 127.0.0.1:3002 -c "${current_list}" -j)
-    merged_json=$(echo "$merged_json" | jq -c --argjson response "$response" '. * $response')
-
-    # long format with -J. make sure to init merged_json as "[]".
-    #response=$(vclient -h 127.0.0.1:3002 -c "${current_list}" -J)
-    #merged_json=$(echo "$merged_json" | jq -c --argjson response "$response" '. + $response')
-}
-
-
-if [ $status -ne 0 ];then
-	echo "Failed to start vcontrold"
+if [ $status -ne 0 ]; then
+    echo "Failed to start vcontrold"
 fi
 
-if [ $MQTTACTIVE = true ]; then
-	echo "vcontrold started (PID $pid)"
-	echo "MQTT: active (var = $MQTTACTIVE)"
-	echo "Update interval: $INTERVAL sec"
-        echo "Commands: $COMMANDS"
+if [ "${MQTTACTIVE:-false}" = true ]; then
+    echo "vcontrold started (PID $pid)"
+    echo "MQTT: active (var = $MQTTACTIVE)"
+    echo "Update interval: $INTERVAL sec"
+    echo "Commands: $COMMANDS"
 
-        /app/subscribe.sh
+    # start request/response handler in background
+    # /app/subscribe.sh &
 
-	while true; do
+    # Run vclient on a sublist of commands and publish one plain value per command
+    execute_vclient_and_publish_values() {
+        local current_list=$1
+        local response
 
-                # Temporary variable to build sublists
-                sublist=""
+        # vclient JSON (short form, one object with keys for each command)
+        response=$(vclient -h 127.0.0.1:3002 -c "${current_list}" -j)
 
-                # merged results to the sublists
-                merged_json="{}"
+        # response is e.g. { "CMD1": {...}, "CMD2": {...} }
+        # Publish each CMD's .value as a plain payload
+        for cmd in $(echo "$response" | jq -r 'keys[]'); do
+            # Extract just the "value" field (string/number/boolean)
+            # Adjust this path if your vclient JSON differs
+            cmd_value=$(echo "$response" | jq -r --arg key "$cmd" '.[$key].value')
 
-                # Split the COMMANDS string into sublists to avoid the 512 character limit on vclient. https://github.com/openv/vcontrold/pull/135
-                IFS=','  # Set comma as the field separator
-                for cmd in $COMMANDS; do
+            # Topic suffix: scheduled_poll/<command-name>
+            MQTT_SUBTOPIC="info/${cmd}"
 
-                    # Check if adding the next command exceeds the max length
-                    if [[ ${#sublist} -eq 0 ]]; then
-                        sublist="$cmd"
-                    elif (( ${#sublist} + ${#cmd} + 1 <= MAX_LENGTH )); then
-                        sublist+=",${cmd}"
-                    else
-                        # Execute the current sublist and reset
-                        execute_vclient "$sublist"
-                        sublist="$cmd"
-                    fi
+            # Publish plain value to MQTT
+            /app/publish.sh "$MQTT_SUBTOPIC" <<< "$cmd_value"
+        done
+    }
 
-                done
+    while true; do
+        sublist=""
 
-                # Execute the last sublist if it exists
-                if [[ -n $sublist ]]; then
-                    execute_vclient "$sublist"
-                fi
+        IFS=','  # Split COMMANDS by comma
+        for cmd in $COMMANDS; do
 
+            # First command in a new sublist
+            if [[ ${#sublist} -eq 0 ]]; then
+                sublist="$cmd"
+            # Can still append without exceeding max
+            elif (( ${#sublist} + ${#cmd} + 1 <= MAX_LENGTH )); then
+                sublist+=",${cmd}"
+            else
+                # Execute current sublist and reset
+                execute_vclient_and_publish_values "$sublist"
+                sublist="$cmd"
+            fi
 
-                # after all commands have been executed, publish the response.
-                /app/publish.sh <<< "$merged_json"
+        done
 
+        # Execute the last sublist if it exists
+        if [[ -n $sublist ]]; then
+            execute_vclient_and_publish_values "$sublist"
+        fi
 
-		if [ -e /tmp/vcontrold.pid ]; then
-			:
-		else
-			echo "vcontrold.pid doesn't exist. exit with code 0"
-			exit 0
-		fi
+        if [ -e /tmp/vcontrold.pid ]; then
+            :
+        else
+            echo "vcontrold.pid doesn't exist. exit with code 0"
+            exit 0
+        fi
 
-                sleep "$INTERVAL"
-	done
+        sleep "$INTERVAL"
+    done
 else
-	echo "vcontrold started (PID $pid)"
-	echo "MQTT: inactive (var = $MQTTACTIVE)"
-	echo "PID: $pid"
+    echo "vcontrold started (PID $pid)"
+    echo "MQTT: inactive (var = $MQTTACTIVE)"
+    echo "PID: $pid"
 
-	while sleep 600; do
-		if [ -e /tmp/vcontrold.pid ]; then
-			:
-		else
-			echo "vcontrold.pid doesn't exist. exit with code 0"
-			exit 0
-		fi
-	done
+    while sleep 600; do
+        if [ -e /tmp/vcontrold.pid ]; then
+            :
+        else
+            echo "vcontrold.pid doesn't exist. exit with code 0"
+            exit 0
+        fi
+    done
 fi
