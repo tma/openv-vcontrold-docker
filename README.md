@@ -68,12 +68,11 @@ When enabling TLS, mount your certificate material into the container (for examp
 
 ## Customizing Configuration
 - **XML definitions**: Replace `config/vito.xml` and `config/vcontrold.xml` with ones matching your boiler/heat pump. The container mounts `/config` as a volume and never overwrites files that already exist there.
-- **Logging**: Bind-mount a host directory to `/log` (as shown in the sample compose file) to persist `vcontrold` logs.
 - **Standalone usage**: If you prefer raw `docker run`, pass the same volumes/devices/env vars manually:
   ```bash
   docker run -d --name vcontrold \
     --device /dev/serial/by-id/<your-ftdi>:/dev/vitocal \
-    -v "$PWD/config:/config" -v "$PWD/log:/log" \
+      -v "$PWD/config:/config" \
    -e MQTT_ACTIVE=true -e MQTT_HOST=10.0.0.1 -e MQTT_TOPIC=vcontrold \
     ghcr.io/<your-namespace>/openv-vcontrold-docker:latest
   ```
@@ -107,6 +106,5 @@ services:
          COMMANDS: "getTempWWObenIst,getTempWWsoll,getNeigungHK1"
       volumes:
          - ./config:/config
-         - ./log:/log
          # - ./certs:/certs:ro   # mount TLS material if needed
 ```
