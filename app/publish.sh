@@ -1,20 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# Validate environment
-if [[ -z "${MQTTHOST:-}" ]] || [[ -z "${MQTTTOPIC:-}" ]]; then
-    echo "Error: MQTTHOST or MQTTTOPIC is not set" >&2
-    exit 1
-fi
+. /app/common.sh
+mqtt_require_env
+mapfile -t MOSQUITTO_ARGS < <(mosquitto_arguments "$MQTT_HOST" "$MQTT_PORT" "$MQTT_USER" "$MQTT_PASSWORD")
 
 SUBTOPIC="${1:-}"
-FULL_TOPIC="${MQTTTOPIC}/${SUBTOPIC}"
+FULL_TOPIC="${MQTT_TOPIC}/${SUBTOPIC}"
 PAYLOAD=$(cat)
 
 # Publish message
 mosquitto_pub \
-  -u "${MQTTUSER:-}" -P "${MQTTPASSWORD:-}" \
-  -h "${MQTTHOST}" -p "${MQTTPORT:-1883}" \
+  "${MOSQUITTO_ARGS[@]}" \
   -t "$FULL_TOPIC" \
   -m "$PAYLOAD" \
   -V "mqttv5" \

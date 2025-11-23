@@ -7,6 +7,8 @@ MAX_LENGTH="${MAX_LENGTH:-512}"
 VCONTROLD_HOST="127.0.0.1"
 VCONTROLD_PORT="3002"
 PID_FILE="/tmp/vcontrold.pid"
+MQTT_ACTIVE="${MQTT_ACTIVE:-false}"
+MQTT_SUBSCRIBE="${MQTT_SUBSCRIBE:-false}"
 
 echo "Device: ${USB_DEVICE}"
 
@@ -45,12 +47,12 @@ done
 PID=$(cat "$PID_FILE")
 echo "vcontrold started (PID $PID)"
 
-if [ "${MQTTACTIVE:-false}" = true ]; then
+if [ "${MQTT_ACTIVE}" = true ]; then
     echo "MQTT: active"
     echo "Update interval: ${INTERVAL:-60} sec"
 
     # Start subscriber in background if enabled (default: false)
-    if [ "${MQTTSUBSCRIBE:-false}" = true ]; then
+    if [ "${MQTT_SUBSCRIBE}" = true ]; then
         if [ -f "/app/subscribe.sh" ]; then
             echo "MQTT: Starting subscriber..."
             /app/subscribe.sh &
@@ -59,7 +61,7 @@ if [ "${MQTTACTIVE:-false}" = true ]; then
             echo "Warning: /app/subscribe.sh not found, skipping subscription."
         fi
     else
-        echo "MQTT: Subscription disabled via MQTTSUBSCRIBE env var."
+        echo "MQTT: Subscription disabled via MQTT_SUBSCRIBE env var."
     fi
 
     execute_vclient_and_publish_values() {

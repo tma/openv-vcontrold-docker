@@ -1,20 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# Basic env validation
-if [[ -z "${MQTTHOST:-}" ]] || [[ -z "${MQTTTOPIC:-}" ]]; then
-    echo "Error: MQTTHOST or MQTTTOPIC is not set" >&2
-    exit 1
-fi
+. /app/common.sh
+mqtt_require_env
+mapfile -t MOSQUITTO_ARGS < <(mosquitto_arguments "$MQTT_HOST" "$MQTT_PORT" "$MQTT_USER" "$MQTT_PASSWORD")
 
 # Use a while loop that restarts the subscription if it crashes
 while true; do
     echo "Starting MQTT subscription..."
 
     mosquitto_sub \
-        -u "${MQTTUSER:-}" -P "${MQTTPASSWORD:-}" \
-        -h "${MQTTHOST}" -p "${MQTTPORT:-1883}" \
-        -t "${MQTTTOPIC}/request" \
+        "${MOSQUITTO_ARGS[@]}" \
+        -t "${MQTT_TOPIC}/request" \
     | while read -r payload; do
         if [ -z "$payload" ]; then
             continue
@@ -23,9 +20,8 @@ while true; do
         # Capture output, don't crash on error
         if response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j 2>/dev/null); then
             mosquitto_pub \
-                -u "${MQTTUSER:-}" -P "${MQTTPASSWORD:-}" \
-                -h "${MQTTHOST}" -p "${MQTTPORT:-1883}" \
-                -t "${MQTTTOPIC}/response" \
+                "${MOSQUITTO_ARGS[@]}" \
+                -t "${MQTT_TOPIC}/response" \
                 -m "$response" \
                 -V "mqttv5" \
                 -W 10
