@@ -7,6 +7,8 @@ MAX_LENGTH="${MAX_LENGTH:-512}"
 VCONTROLD_HOST="127.0.0.1"
 VCONTROLD_PORT="3002"
 PID_FILE="/tmp/vcontrold.pid"
+SLEEP_PID=""
+SUB_PID=""
 MQTT_ACTIVE="${MQTT_ACTIVE:-false}"
 MQTT_SUBSCRIBE="${MQTT_SUBSCRIBE:-false}"
 
@@ -18,17 +20,32 @@ cleanup() {
     if [ -f "$PID_FILE" ]; then
         kill "$(cat "$PID_FILE")" 2>/dev/null || true
     fi
+    if [[ -n "$SLEEP_PID" ]]; then
+        kill "$SLEEP_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$SUB_PID" ]]; then
+        kill "$SUB_PID" 2>/dev/null || true
+        wait "$SUB_PID" 2>/dev/null || true
+    fi
     exit 0
 }
 trap cleanup SIGTERM SIGINT
+
+interruptible_sleep() {
+    local duration="$1"
+    sleep "$duration" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || true
+    SLEEP_PID=""
+}
 
 ### Execution
 
 # Remove stale pid file
 rm -f "$PID_FILE"
 
-# Ensure correct ownership of config files
-if [ -d /config ]; then
+# Ensure correct ownership of config files (best effort, skip if read-only or non-root)
+if [ -d /config ] && [ "$(id -u)" -eq 0 ] && [ -w /config ]; then
     chown -R vcontrold:vcontrold /config || true
 fi
 
@@ -41,7 +58,7 @@ echo "Waiting for vcontrold to accept connections..."
 MAX_RETRIES=30
 count=0
 while ! vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "version" >/dev/null 2>&1; do
-    sleep 1
+    interruptible_sleep 1
     count=$((count+1))
     if [ "$count" -ge "$MAX_RETRIES" ]; then
         echo "Error: vcontrold failed to start within $MAX_RETRIES seconds."
@@ -95,7 +112,7 @@ if [ "${MQTT_ACTIVE}" = true ]; then
 
         # Skip if no commands configured
         if [ -z "${COMMANDS:-}" ]; then
-            sleep "${INTERVAL:-60}"
+            interruptible_sleep "${INTERVAL:-60}"
             continue
         fi
 
@@ -118,7 +135,7 @@ if [ "${MQTT_ACTIVE}" = true ]; then
             execute_vclient_and_publish_values "$sublist"
         fi
 
-        sleep "${INTERVAL:-60}"
+        interruptible_sleep "${INTERVAL:-60}"
     done
 else
     echo "MQTT: inactive"
@@ -128,6 +145,6 @@ else
             echo "Error: vcontrold process died. Exiting."
             exit 1
         fi
-        sleep 60
+        interruptible_sleep 60
     done
 fi
