@@ -1,30 +1,39 @@
 #!/bin/bash
 set -euo pipefail
 
-# This script subscribes to a MQTT topic using mosquitto_sub.
-# On each message received, it sends the payload as a command to vclient
-# and publishes the JSON response back to MQTT.
+# Basic env validation
+if [[ -z "${MQTTHOST:-}" ]] || [[ -z "${MQTTTOPIC:-}" ]]; then
+    echo "Error: MQTTHOST or MQTTTOPIC is not set" >&2
+    exit 1
+fi
 
-while true  # Keep an infinite loop to reconnect when connection lost/broker unavailable
-do
+# Use a while loop that restarts the subscription if it crashes
+while true; do
+    echo "Starting MQTT subscription..."
+
     mosquitto_sub \
-        -u "$MQTTUSER" -P "$MQTTPASSWORD" \
-        -h "$MQTTHOST" -p "$MQTTPORT" \
-        -t "$MQTTTOPIC/request" \
-        -I "VCONTROLD-SUB" \
-    | while read -r payload
-    do
-        # payload is a vclient command string
-        response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j)
+        -u "${MQTTUSER:-}" -P "${MQTTPASSWORD:-}" \
+        -h "${MQTTHOST}" -p "${MQTTPORT:-1883}" \
+        -t "${MQTTTOPIC}/request" \
+    | while read -r payload; do
+        if [ -z "$payload" ]; then
+            continue
+        fi
 
-        # For request/response, keep JSON – caller likely wants structure
-        mosquitto_pub \
-            -u "$MQTTUSER" -P "$MQTTPASSWORD" \
-            -h "$MQTTHOST" -p "$MQTTPORT" \
-            -t "$MQTTTOPIC/response" \
-            -m "$response" \
-            -x 120 -c --id "VCONTROLD-PUB" -V "mqttv5"
+        # Capture output, don't crash on error
+        if response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j 2>/dev/null); then
+            mosquitto_pub \
+                -u "${MQTTUSER:-}" -P "${MQTTPASSWORD:-}" \
+                -h "${MQTTHOST}" -p "${MQTTPORT:-1883}" \
+                -t "${MQTTTOPIC}/response" \
+                -m "$response" \
+                -V "mqttv5" \
+                -W 10
+        else
+            echo "Error executing command: $payload"
+        fi
     done
 
-    sleep 10  # Wait 10 seconds until reconnection
+    echo "MQTT subscriber disconnected. Retrying in 10s..."
+    sleep 10
 done

@@ -1,106 +1,126 @@
 #!/bin/bash
 set -euo pipefail
 
-sleep 3
+# Configuration with defaults
+USB_DEVICE="${USB_DEVICE:-/dev/vitocal}"
+MAX_LENGTH="${MAX_LENGTH:-512}"
+VCONTROLD_HOST="127.0.0.1"
+VCONTROLD_PORT="3002"
+PID_FILE="/tmp/vcontrold.pid"
 
-### config
+echo "Device: ${USB_DEVICE}"
 
-# the max command length vclient can accept (see vcontrold PR #135)
-MAX_LENGTH=512
+# Cleanup handler
+cleanup() {
+    echo "Received shutdown signal. Exiting..."
+    if [ -f "$PID_FILE" ]; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    fi
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
 
-# the usb device
-USB_DEVICE=/dev/vitocal
-echo "Device ${USB_DEVICE}"
+### Execution
 
-### execution
+# Remove stale pid file
+rm -f "$PID_FILE"
 
-# run vcontrold with the config; logging is controlled by /config/vcontrold.xml
-vcontrold -x /config/vcontrold.xml -P /tmp/vcontrold.pid
+# Start vcontrold
+echo "Starting vcontrold..."
+vcontrold -x /config/vcontrold.xml -P "$PID_FILE"
 
-status=$?
-pid=$(pidof vcontrold || true)
+# Wait for vcontrold to be ready (checking port availability)
+echo "Waiting for vcontrold to accept connections..."
+MAX_RETRIES=30
+count=0
+while ! vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "version" >/dev/null 2>&1; do
+    sleep 1
+    count=$((count+1))
+    if [ "$count" -ge "$MAX_RETRIES" ]; then
+        echo "Error: vcontrold failed to start within $MAX_RETRIES seconds."
+        exit 1
+    fi
+done
 
-if [ $status -ne 0 ]; then
-    echo "Failed to start vcontrold"
-fi
+PID=$(cat "$PID_FILE")
+echo "vcontrold started (PID $PID)"
 
 if [ "${MQTTACTIVE:-false}" = true ]; then
-    echo "vcontrold started (PID $pid)"
-    echo "MQTT: active (var = $MQTTACTIVE)"
-    echo "Update interval: $INTERVAL sec"
-    echo "Commands: $COMMANDS"
+    echo "MQTT: active"
+    echo "Update interval: ${INTERVAL:-60} sec"
 
-    # start request/response handler in background
-    # /app/subscribe.sh &
+    # Start subscriber in background if enabled (default: false)
+    if [ "${MQTTSUBSCRIBE:-false}" = true ]; then
+        if [ -f "/app/subscribe.sh" ]; then
+            echo "MQTT: Starting subscriber..."
+            /app/subscribe.sh &
+            SUB_PID=$!
+        else
+            echo "Warning: /app/subscribe.sh not found, skipping subscription."
+        fi
+    else
+        echo "MQTT: Subscription disabled via MQTTSUBSCRIBE env var."
+    fi
 
-    # Run vclient on a sublist of commands and publish one plain value per command
     execute_vclient_and_publish_values() {
         local current_list=$1
         local response
 
-        # vclient JSON (short form, one object with keys for each command)
-        response=$(vclient -h 127.0.0.1:3002 -c "${current_list}" -j)
+        # Run vclient with error checking
+        if ! response=$(vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "${current_list}" -j 2>/dev/null); then
+            echo "Warning: vclient command failed for list: $current_list"
+            return
+        fi
 
-        # response is e.g. { "CMD1": {...}, "CMD2": {...} }
-        # Publish each CMD's .value as a plain payload
-        for cmd in $(echo "$response" | jq -r 'keys[]'); do
-            # Extract just the "value" field (string/number/boolean)
-            # Adjust this path if your vclient JSON differs
-            cmd_value=$(echo "$response" | jq -r --arg key "$cmd" '.[$key].value')
-
-            # Topic suffix: scheduled_poll/<command-name>
+        # Parse and publish
+        echo "$response" | jq -r 'to_entries[] | "\(.key) \(.value.value)"' | while read -r cmd value; do
             MQTT_SUBTOPIC="info/${cmd}"
-
-            # Publish plain value to MQTT
-            /app/publish.sh "$MQTT_SUBTOPIC" <<< "$cmd_value"
+            /app/publish.sh "$MQTT_SUBTOPIC" <<< "$value"
         done
     }
 
     while true; do
+        # Check if vcontrold is still running
+        if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Error: vcontrold process died. Exiting."
+            exit 1
+        fi
+
+        # Skip if no commands configured
+        if [ -z "${COMMANDS:-}" ]; then
+            sleep "${INTERVAL:-60}"
+            continue
+        fi
+
         sublist=""
-
-        IFS=','  # Split COMMANDS by comma
+        old_ifs=$IFS
+        IFS=','
         for cmd in $COMMANDS; do
-
-            # First command in a new sublist
             if [[ ${#sublist} -eq 0 ]]; then
                 sublist="$cmd"
-            # Can still append without exceeding max
             elif (( ${#sublist} + ${#cmd} + 1 <= MAX_LENGTH )); then
-                sublist+=",${cmd}"
+                sublist+=",$cmd"
             else
-                # Execute current sublist and reset
                 execute_vclient_and_publish_values "$sublist"
                 sublist="$cmd"
             fi
-
         done
+        IFS=$old_ifs
 
-        # Execute the last sublist if it exists
         if [[ -n $sublist ]]; then
             execute_vclient_and_publish_values "$sublist"
         fi
 
-        if [ -e /tmp/vcontrold.pid ]; then
-            :
-        else
-            echo "vcontrold.pid doesn't exist. exit with code 0"
-            exit 0
-        fi
-
-        sleep "$INTERVAL"
+        sleep "${INTERVAL:-60}"
     done
 else
-    echo "vcontrold started (PID $pid)"
-    echo "MQTT: inactive (var = $MQTTACTIVE)"
-    echo "PID: $pid"
-
-    while sleep 600; do
-        if [ -e /tmp/vcontrold.pid ]; then
-            :
-        else
-            echo "vcontrold.pid doesn't exist. exit with code 0"
-            exit 0
+    echo "MQTT: inactive"
+    # Simple keepalive loop
+    while true; do
+        if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Error: vcontrold process died. Exiting."
+            exit 1
         fi
+        sleep 60
     done
 fi
