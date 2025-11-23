@@ -98,7 +98,7 @@ if [ "${MQTT_ACTIVE}" = true ]; then
 
         # Parse and publish (accept plain numbers or objects with a nested value field)
         echo "$response" | jq -r 'to_entries[] | "\(.key) \(.value | (if type=="object" and has("value") then .value else . end))"' | while read -r cmd value; do
-            MQTT_SUBTOPIC="info/${cmd}"
+            MQTT_SUBTOPIC="command/${cmd}"
             /app/publish.sh "$MQTT_SUBTOPIC" <<< "$value"
         done
     }

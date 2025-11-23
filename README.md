@@ -37,7 +37,7 @@ Containerized build of [openv/vcontrold](https://github.com/openv/vcontrold) wit
 On startup, `app/startup.sh` runs `vcontrold`, waits for it to answer `vclient`, and optionally starts the MQTT publisher/subscriber loops.
 
 ## MQTT Data Flow
-- **Periodic publish**: Every `INTERVAL` seconds, commands listed in `COMMANDS` are grouped (max `MAX_LENGTH` characters per `vclient` call) and their JSON output is flattened into MQTT topics `${MQTT_TOPIC}/info/<command>` with the numeric value as the payload.
+- **Periodic publish**: Every `INTERVAL` seconds, commands listed in `COMMANDS` are grouped (max `MAX_LENGTH` characters per `vclient` call) and their JSON output is flattened into MQTT topics `${MQTT_TOPIC}/command/<command>` with the numeric value as the payload.
 - **Request/response (opt-in)**: When `MQTT_SUBSCRIBE=true`, the container listens on `${MQTT_TOPIC}/request`. Each incoming payload is treated as a `vclient` command; the JSON response is written to `${MQTT_TOPIC}/response`.
 
 ## Configuration & Environment Variables
@@ -49,7 +49,7 @@ On startup, `app/startup.sh` runs `vcontrold`, waits for it to answer `vclient`,
 | `MQTT_SUBSCRIBE` | `false` | When `true`, `subscribe.sh` listens for `${MQTT_TOPIC}/request` commands and publishes responses. Requires `MQTT_ACTIVE=true`. |
 | `MQTT_HOST` | _(required when MQTT active)_ | Hostname/IP of your MQTT broker. |
 | `MQTT_PORT` | `1883` | MQTT broker TCP port. |
-| `MQTT_TOPIC` | _(required when MQTT active)_ | Base topic prefix for publish/subscribe traffic (e.g. `vcontrold`). Subtopics `info/`, `request`, `response` are appended automatically. |
+| `MQTT_TOPIC` | _(required when MQTT active)_ | Base topic prefix for publish/subscribe traffic (e.g. `vcontrold`). Subtopics `command/`, `request`, `response` are appended automatically. |
 | `MQTT_USER` | empty | Username for brokers that enforce authentication. Leave empty for anonymous access. |
 | `MQTT_PASSWORD` | empty | Password corresponding to `MQTT_USER`. |
 | `MQTT_TLS` | `false` | Enable TLS for MQTT connections. Set to `true` (and typically `MQTT_PORT=8883`) when your broker requires TLS. |
