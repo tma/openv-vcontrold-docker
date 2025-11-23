@@ -39,6 +39,7 @@ COPY --from=downloader /vcontrold.deb /tmp/vcontrold.deb
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
+    ca-certificates \
     libxml2 \
     mosquitto-clients \
     jq \

@@ -27,6 +27,11 @@ trap cleanup SIGTERM SIGINT
 # Remove stale pid file
 rm -f "$PID_FILE"
 
+# Ensure correct ownership of config files
+if [ -d /config ]; then
+    chown -R vcontrold:vcontrold /config || true
+fi
+
 # Start vcontrold
 echo "Starting vcontrold..."
 vcontrold -x /config/vcontrold.xml -P "$PID_FILE"
@@ -74,8 +79,8 @@ if [ "${MQTT_ACTIVE}" = true ]; then
             return
         fi
 
-        # Parse and publish
-        echo "$response" | jq -r 'to_entries[] | "\(.key) \(.value.value)"' | while read -r cmd value; do
+        # Parse and publish (accept plain numbers or objects with a nested value field)
+        echo "$response" | jq -r 'to_entries[] | "\(.key) \(.value | (if type=="object" and has("value") then .value else . end))"' | while read -r cmd value; do
             MQTT_SUBTOPIC="info/${cmd}"
             /app/publish.sh "$MQTT_SUBTOPIC" <<< "$value"
         done
