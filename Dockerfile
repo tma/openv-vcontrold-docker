@@ -23,7 +23,6 @@ RUN set -eux; \
     "amd64") DEB_ARCH="amd64" ;; \
     "arm64") DEB_ARCH="arm64" ;; \
     "arm-v7") DEB_ARCH="armhf" ;; \
-    "arm-v6") DEB_ARCH="armel" ;; \
     *) echo "Unsupported arch: ${TARGETARCH}${TARGETVARIANT:+-${TARGETVARIANT}}"; exit 1 ;; \
     esac; \
     wget -O /vcontrold.deb \
