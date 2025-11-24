@@ -49,7 +49,7 @@ RUN apt-get update \
 
 # Create required folders and non-root user
 RUN groupadd -r vcontrold \
-    && useradd --no-log-init -r -g vcontrold vcontrold \
+    && useradd --no-log-init -r -g vcontrold -G dialout vcontrold \
     && mkdir -p /config /app \
     && chown -R vcontrold:vcontrold /config
 

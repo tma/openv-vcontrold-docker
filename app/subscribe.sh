@@ -18,6 +18,10 @@ while true; do
             continue
         fi
 
+        if [ "${DEBUG:-false}" = true ]; then
+            echo "Debug: Received MQTT request: $payload"
+        fi
+
         # Capture output, don't crash on error
         if response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j 2>/dev/null); then
             /app/publish.sh "response" <<< "$response"

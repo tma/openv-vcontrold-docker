@@ -11,8 +11,7 @@ SLEEP_PID=""
 SUB_PID=""
 MQTT_ACTIVE="${MQTT_ACTIVE:-false}"
 MQTT_SUBSCRIBE="${MQTT_SUBSCRIBE:-false}"
-
-echo "Device: ${USB_DEVICE}"
+export DEBUG="${DEBUG:-false}"
 
 # Cleanup handler
 cleanup() {
@@ -44,14 +43,34 @@ interruptible_sleep() {
 # Remove stale pid file
 rm -f "$PID_FILE"
 
-# Ensure correct ownership of config files (best effort, skip if read-only or non-root)
-if [ -d /config ] && [ "$(id -u)" -eq 0 ] && [ -w /config ]; then
-    chown -R vcontrold:vcontrold /config || true
-fi
-
 # Start vcontrold
 echo "Starting vcontrold..."
-vcontrold -x /config/vcontrold.xml -P "$PID_FILE"
+if [ ! -f /config/vcontrold.xml ]; then
+    echo "Error: /config/vcontrold.xml not found!"
+    exit 1
+fi
+
+# Change to config directory to ensure relative includes work
+cd /config
+
+# Start vcontrold in background
+if [ "${DEBUG}" = true ]; then
+    echo "Debug mode enabled"
+    vcontrold -n -x vcontrold.xml --verbose --debug &
+else
+    vcontrold -n -x vcontrold.xml &
+fi
+PID=$!
+echo "$PID" > "$PID_FILE"
+
+sleep 2
+if ! kill -0 "$PID" 2>/dev/null; then
+    echo "vcontrold crashed on startup."
+    exit 1
+fi
+
+# Revert to app directory
+cd /app
 
 # Wait for vcontrold to be ready (checking port availability)
 echo "Waiting for vcontrold to accept connections..."
@@ -90,10 +109,18 @@ if [ "${MQTT_ACTIVE}" = true ]; then
         local current_list=$1
         local response
 
+        if [ "${DEBUG}" = true ]; then
+            echo "Debug: Executing vclient for: $current_list"
+        fi
+
         # Run vclient with error checking
         if ! response=$(vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "${current_list}" -j 2>/dev/null); then
             echo "Warning: vclient command failed for list: $current_list"
             return
+        fi
+
+        if [ "${DEBUG}" = true ]; then
+            echo "Debug: vclient response: $response"
         fi
 
         # Parse and publish (accept plain numbers or objects with a nested value field)

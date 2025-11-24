@@ -10,6 +10,10 @@ SUBTOPIC="${1:-}"
 FULL_TOPIC="${MQTT_TOPIC}/${SUBTOPIC}"
 PAYLOAD=$(cat)
 
+if [ "${DEBUG:-false}" = true ]; then
+    echo "Debug: Publishing to $FULL_TOPIC: $PAYLOAD"
+fi
+
 MOSQUITTO_TIMEOUT="${MQTT_TIMEOUT:-10}"
 MOSQUITTO_BIN=(mosquitto_pub "${MOSQUITTO_ARGS[@]}" -t "$FULL_TOPIC" -m "$PAYLOAD" -V "mqttv5")
 
