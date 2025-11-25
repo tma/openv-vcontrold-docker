@@ -50,15 +50,12 @@ if [ ! -f /config/vcontrold.xml ]; then
     exit 1
 fi
 
-# Change to config directory to ensure relative includes work
-cd /config
-
 # Start vcontrold in background
 if [ "${DEBUG}" = true ]; then
     echo "Debug mode enabled"
-    vcontrold -n -x vcontrold.xml --verbose --debug &
+    vcontrold -n -x /config/vcontrold.xml --verbose --debug &
 else
-    vcontrold -n -x vcontrold.xml &
+    vcontrold -n -x /config/vcontrold.xml &
 fi
 PID=$!
 echo "$PID" > "$PID_FILE"
@@ -68,9 +65,6 @@ if ! kill -0 "$PID" 2>/dev/null; then
     echo "vcontrold crashed on startup."
     exit 1
 fi
-
-# Revert to app directory
-cd /app
 
 # Wait for vcontrold to be ready (checking port availability)
 echo "Waiting for vcontrold to accept connections..."
@@ -114,8 +108,9 @@ if [ "${MQTT_ACTIVE}" = true ]; then
         fi
 
         # Run vclient with error checking
-        if ! response=$(vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "${current_list}" -j 2>/dev/null); then
+        if ! response=$(vclient -h "$VCONTROLD_HOST:$VCONTROLD_PORT" -c "${current_list}" -j 2>&1); then
             echo "Warning: vclient command failed for list: $current_list"
+            echo "Debug: vclient output: $response"
             return
         fi
 
@@ -123,8 +118,19 @@ if [ "${MQTT_ACTIVE}" = true ]; then
             echo "Debug: vclient response: $response"
         fi
 
+        # Filter out "SRV ERR:" lines and extract only the JSON part
+        local json_response
+        json_response=$(echo "$response" | grep -v '^SRV ERR:' | grep '^{')
+
+        if [ -z "$json_response" ]; then
+            echo "Warning: No valid JSON in vclient response"
+            return
+        fi
+
         # Parse and publish (accept plain numbers or objects with a nested value field)
-        echo "$response" | jq -r 'to_entries[] | "\(.key) \(.value | (if type=="object" and has("value") then .value else . end))"' | while read -r cmd value; do
+        # Filter out empty or null values. We MUST accept 0 because it can be a valid reading (e.g. 0°C).
+        # Note: vcontrold may return 0.000000 on timeout/error, which is indistinguishable from valid 0.
+        echo "$json_response" | jq -r 'to_entries[] | .key as $k | (.value | (if type=="object" and has("value") then .value else . end)) as $v | select($v != null and $v != "") | "\($k) \($v)"' | while read -r cmd value; do
             MQTT_SUBTOPIC="command/${cmd}"
             /app/publish.sh "$MQTT_SUBTOPIC" <<< "$value"
         done
