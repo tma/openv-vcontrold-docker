@@ -10,7 +10,7 @@
 				<allow ip='127.0.0.1'/>
 			</net>
 			<logging>
-				<file>/log/deleteme.log</file>
+				<file>/dev/stdout</file>
 				<syslog>n</syslog>
 				<debug>n</debug>
 			</logging>

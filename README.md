@@ -1,109 +1,150 @@
-# openv-vcontrold-docker
+# vcontrold Docker — Viessmann Heating Controller with MQTT
 
-Viessmann Optolink Control based on OpenV library.
-This container uses the vcontrold deamon to connect to a Viessmann heating system.
-To get get the values, the `vclient` tool is used. The responses are published mqtt broker.
+Containerized build of [openv/vcontrold](https://github.com/openv/vcontrold) with optional MQTT telemetry so you can query a Viessmann heating controller from any machine that runs Docker. The image bundles vcontrold, the Viessmann XML definitions, and helper scripts for scheduled polls as well as on-demand requests over MQTT.
 
-The container supports an interval-based polling procedure of predefined (configured) command values as well as on-demand commands via MQTT.
+> This project builds upon the excellent work of [@michelde](https://github.com/michelde) and [@Astretowe](https://github.com/Astretowe). See [Credits](#credits) for details.
 
-In the compose file, we can configure the "COMMANDS" var to hold a comma-separated string of commands that will automatically be polled.
-The "MQTTTOPIC" represents the base topic for all MQTT communication.
-Based on this base topic, the container uses the following topics:  
+## Highlights
 
-- MQTTTOPIC/scheduled_poll: Responses of the automatic polling procedure get reported here.
-- MQTTTOPIC/request: A comma-separated command string (i.e. "getTempWWObenIst,getTempWWsoll,setTempWWsoll 55") can be published here. the container will execute the commands and return the result.
-- MQTTTOPIC/response: The results for the requests will be published here.
+- Multi-arch image (amd64/arm64/armv7) built directly from upstream `.deb` packages.
+- Ships minimal runtime (Debian bookworm-slim) plus `mosquitto-clients` and `jq` for MQTT + JSON parsing.
+- Opinionated entrypoint that keeps `vcontrold` alive, batches `vclient` commands, and publishes values to MQTT topics.
+- Optional request/response bridge via MQTT subscription so you can run ad-hoc `vclient` commands remotely.
 
+## Repository Layout
 
-## Hardware requirements
+- `Dockerfile`: multi-stage build that downloads and installs the requested vcontrold release.
+- `app/`: startup + MQTT helper scripts executed inside the container.
+- `config/`: example `vcontrold.xml` and device definitions (`vito.xml`). Mount your own config at runtime.
+- `.github/workflows/`: CI/CD pipeline for building and publishing Docker images.
 
-To get this working you need an optolink adatper which is connected to the host system.
-When starting this docker image you need to pass the device into the docker container.
-As something like "/dev/ttyUSB0" can change / vary on reboot, I would recommend to use the serial id from the optolink adapter.
-See example in below docker-compose.yaml file.
-Please note that the device needs to be accessible for read/write operations from the user in the container. You probably have to adjust the rights using chmod.
+## Prerequisites
 
+- Linux host (or VM) with access to the Viessmann Optolink/FTDI adapter. Map the serial device into the container (see compose file).
+- Docker 24.x+ and, if you use the provided stack, Docker Compose V2 (`docker compose`).
+- MQTT broker reachable from the container when `MQTT_ACTIVE=true`.
 
-## Software requirements
+## Quick Start with Docker Compose
 
-A MQTT broker is required in your environment where this container will send the values to.
-If you just want to test the vclient to get values set MQTTACTIVE = false.
-Then you can login to the container using `docker exec -it <containername> bash`.
-In the shell you can then test your commands e.g. `vclient -h 127.0.0.1 -p 3002 -c getTempA,getTempB -j`.
+1. Adjust `docker-compose.yaml`:
+   - Update the `devices` entry to point at your USB adapter (HOST:/dev/vitocal).
+   - Copy your tailored `vcontrold.xml`/`vito.xml` into `config/`.
+   - Set the MQTT environment variables (see table below).
+2. Launch the stack:
+   ```bash
+   docker compose up -d
+   ```
+3. Tail logs or stop the container when needed:
+   ```bash
+   docker compose logs -f vcontrold
+   docker compose down
+   ```
 
+On startup, `app/startup.sh` runs `vcontrold`, waits for it to answer `vclient`, and optionally starts the MQTT publisher/subscriber loops.
 
-## Configuration
+## MQTT Data Flow
 
-The container expects to have the `vcontrold.xml` and `vito.xml` file passed to the `/config` folder.
-Additionally, a `/log` folder can be mounted.
-The log file will be configured in vcontrold.xml.
-However, if you choose `/log/deleteme.log`, the log file will be deleted after creation to work around the lack of proper logrotate.
+- **Periodic publish**: Every `INTERVAL` seconds, commands listed in `COMMANDS` are grouped (max `MAX_LENGTH` characters per `vclient` call) and their JSON output is flattened into MQTT topics `${MQTT_TOPIC}/command/<command>` with the numeric value as the payload.
+- **Request/response (opt-in)**: When `MQTT_SUBSCRIBE=true`, the container listens on `${MQTT_TOPIC}/request`. Each incoming payload is treated as a `vclient` command; the JSON response is written to `${MQTT_TOPIC}/response`.
 
+## Configuration & Environment Variables
 
-### MQTT
+| Variable | Default | Description |
+| --- | --- | --- |
+| `USB_DEVICE` | `/dev/vitocal` | Path inside the container pointing at the Optolink/FTDI serial device. Bind your host device to this path via `--device` or Compose `devices:` mapping. |
+| `MAX_LENGTH` | `512` | Maximum character length of a comma-separated `COMMANDS` batch passed to `vclient`. Prevents oversized requests. |
+| `MQTT_ACTIVE` | `false` | Enable periodic polling + MQTT publishing loop. Set to `true` to activate `publish.sh`. |
+| `MQTT_SUBSCRIBE` | `false` | When `true`, `subscribe.sh` listens for `${MQTT_TOPIC}/request` commands and publishes responses. Requires `MQTT_ACTIVE=true`. |
+| `MQTT_HOST` | _(required when MQTT active)_ | Hostname/IP of your MQTT broker. |
+| `MQTT_PORT` | `1883` | MQTT broker TCP port. |
+| `MQTT_TOPIC` | _(required when MQTT active)_ | Base topic prefix for publish/subscribe traffic (e.g. `vcontrold`). Subtopics `command/`, `request`, `response` are appended automatically. |
+| `MQTT_USER` | empty | Username for brokers that enforce authentication. Leave empty for anonymous access. |
+| `MQTT_PASSWORD` | empty | Password corresponding to `MQTT_USER`. |
+| `MQTT_TLS` | `false` | Enable TLS for MQTT connections. Set to `true` (and typically `MQTT_PORT=8883`) when your broker requires TLS. |
+| `MQTT_CAFILE` | empty | Absolute path to a CA certificate file used to verify the broker when TLS is enabled. |
+| `MQTT_CAPATH` | empty | Directory containing CA certificates (alternative to `MQTT_CAFILE`). |
+| `MQTT_CERTFILE` | empty | Client certificate for mutual TLS authentication. |
+| `MQTT_KEYFILE` | empty | Private key matching `MQTT_CERTFILE`. |
+| `MQTT_TLS_VERSION` | empty | Optional TLS protocol hint (e.g. `tlsv1.2`). |
+| `MQTT_TLS_INSECURE` | `false` | Skip certificate validation when `true`. Useful for testing only. |
+| `MQTT_CLIENT_ID_PREFIX` | `vcontrold` | Prefix for MQTT client IDs. Useful when running multiple instances against the same broker. |
+| `MQTT_TIMEOUT` | `10` | Timeout in seconds for MQTT publish operations. |
+| `INTERVAL` | `60` | Seconds between telemetry polls when `MQTT_ACTIVE=true`. |
+| `COMMANDS` | empty | Comma-separated list of vcontrold command names to poll (example: `getTempWWObenIst,getTempWWsoll`). Each name must exist in your `vcontrold.xml`. |
+| `DEBUG` | `false` | Enable debug logging (see below). |
 
-For the MQTT broker you need to define the following environment variables:
-| variable      | desscription     | example value  |
-| ------------- | ------------- | -----|
-| MQTTACTIVE    | flag to set mqtt active | `true` or `false` |
-| MQTTHOST      | hostname for mqtt broker | `192.168.1.2` or `broker.home` |
-| MQTTPORT      | port for mqtt broker     |  `1883` |
-| MQTTTOPIC     | prefix for topic followed by the command | `smarthome/optolink/` |
-| MQTTUSER      | if mqtt broker requires authentification |  `mqtt_user` |
-| MQTTPASSWORD  | if mqtt broker requires authentification |  `secret123` |
+The reference compose file below ships sensible defaults (MQTT enabled, command list populated). Override anything via your own `.env` file or `environment:` block.
 
+When enabling TLS, mount your certificate material into the container (for example `./certs:/certs`) and point the env vars at those absolute in-container paths (`/certs/ca.crt`, `/certs/client.crt`, etc.).
 
-### Commands
+## Customizing Configuration
 
-The commands which should be read can be configured using the environment variable `COMMANDS`.
-If you want to read multiple commands, each command must be separated by a comma.
-As an example, my current `COMMANDS` variable looks like this:
+- **XML definitions**: Replace `config/vito.xml` and `config/vcontrold.xml` with ones matching your boiler/heat pump. The container mounts `/config` as a volume and never overwrites files that already exist there.
+- **Standalone usage**: If you prefer raw `docker run`, pass the same volumes/devices/env vars manually:
+  ```bash
+  docker run -d --name vcontrold \
+    --device /dev/serial/by-id/<your-ftdi>:/dev/vitocal \
+      -v "$PWD/config:/config" \
+   -e MQTT_ACTIVE=true -e MQTT_HOST=10.0.0.1 -e MQTT_TOPIC=vcontrold \
+    ghcr.io/<your-namespace>/openv-vcontrold-docker:latest
+  ```
 
-```bash
-COMMANDS=getTempWWObenIst,getTempWWsoll,getNeigungHK1,getTempVL,getTempRL,getPumpeStatusZirku,getBetriebArtHK1,getTempVListHK1,getTempRListHK1,getStatusVerdichter,getJAZ,getJAZHeiz,getJAZWW,getTempA,getPumpeStatusHK1
+With Docker Compose or `docker run`, the container stays alive as long as `vcontrold` is healthy and will exit if the daemon stops unexpectedly. Review `docker compose logs vcontrold` for troubleshooting.
+
+## Debugging
+
+Set `DEBUG=true` to enable verbose logging. This affects multiple components:
+
+- **vcontrold daemon**: Starts with `--verbose --debug` flags, producing detailed protocol-level output (bytes sent/received on the Optolink interface, command parsing, etc.).
+- **Polling loop** (`startup.sh`): Logs each `vclient` command batch before execution and prints the raw JSON response.
+- **MQTT publish** (`publish.sh`): Logs the full topic path and payload for every message sent to the broker.
+- **MQTT subscribe** (`subscribe.sh`): Logs incoming request payloads received on the `${MQTT_TOPIC}/request` topic.
+
+Example output with `DEBUG=true`:
+```
+Debug mode enabled
+Debug: Executing vclient for: getTempWWObenIst,getTempWWsoll
+Debug: vclient response: {"getTempWWObenIst":{"value":48.1},"getTempWWsoll":{"value":50}}
+Debug: Publishing to vcontrold/command/getTempWWObenIst: 48.1
+Debug: Publishing to vcontrold/command/getTempWWsoll: 50
 ```
 
+Use this when diagnosing communication issues with your heating controller or MQTT broker.
 
-### Read interval
-
-The environment variable `INTERVAL` defines the time in seconds
-
-
-## Starting the container
-
-The easiest way is to create a `docker-compose.yaml` file.
-We can then use `docker compose up -d` (start) or `docker compose up -d --build vcontrold` (force rebuild).
-
-Note: You probably need to give further rights to the device and the log folder.
-Both need to be read/write for the user inside the container.
-
-Here is an example file:
+### Reference `docker-compose.yaml`
 
 ```yaml
-version: '3.1'
 services:
   vcontrold:
-    #image: michelmu/vcontrold-openv
-    build: .
-	container_name: vcontrold
+    image: ghcr.io/tma/openv-vcontrold-docker:latest
+    container_name: vcontrold
     restart: unless-stopped
     devices:
-      - /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AL1234-if00-port0:/dev/ttyUSB0
+      - /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AL00AKZQ-if00-port0:/dev/vitocal:rwm
     environment:
-      MQTTACTIVE: true
-      MQTTHOST: 10.6.91.24
-      MQTTPORT: 1883
-      MQTTTOPIC: vcontrold
-      MQTTUSER: ""
-      MQTTPASSWORD: ""
+      MQTT_ACTIVE: true
+      MQTT_HOST: 10.0.0.1
+      MQTT_PORT: 1883
+      MQTT_TOPIC: vcontrold
+      MQTT_USER: ""
+      MQTT_PASSWORD: ""
+      # MQTT_TLS: true       # uncomment + set when your broker requires TLS
+      # MQTT_PORT: 8883      # typical TLS port
+      # MQTT_CAFILE: /certs/ca.crt
+      # MQTT_CERTFILE: /certs/client.crt
+      # MQTT_KEYFILE: /certs/client.key
       INTERVAL: 30
       COMMANDS: "getTempWWObenIst,getTempWWsoll,getNeigungHK1"
     volumes:
       - ./config:/config
-      - ./log//log
-
+      # - ./certs:/certs:ro   # mount TLS material if needed
 ```
 
-In order to pass the environment variables you can use the `.env` file and set the variables according to your needs.
+## Credits
 
-If you want to use the `docker` command it would be e.g. `docker run -d --name='vcontrold' -e TZ="Europe/Berlin" -e 'MQTTACTIVE'='true' -e 'MQTTHOST'='mqtt-server.home' -e 'MQTTPORT'='1883' -e 'MQTTTOPIC'='vitocal' -e 'MQTTUSER'='mqtt_user' -e 'MQTTPASSWORD'='secret123' -e 'INTERVAL'='30' -e 'COMMANDS'='getTempWWObenIst,getTempWWsoll,getNeigungHK1' -v './config/':'/config':'rw' -v './log/':'/log':'rw' --device=/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AL1234-if00-port0:/dev/ttyUSB0:rw 'michelmu/vcontrold-openv-mqtt'`
+This project is a fork that builds on prior work:
+
+- **[@michelde](https://github.com/michelde)** — Original [openv-vcontrold-docker](https://github.com/michelde/openv-vcontrold-docker) implementation that established the container approach for vcontrold.
+- **[@Astretowe](https://github.com/Astretowe)** — [Fork](https://github.com/Astretowe/openv-vcontrold-docker) with additional improvements and MQTT enhancements.
+
+Thank you both for your contributions to the open-source Viessmann/OpenV community!
