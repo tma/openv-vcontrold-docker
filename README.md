@@ -45,7 +45,27 @@ On startup, `app/startup.sh` runs `vcontrold`, waits for it to answer `vclient`,
 ## MQTT Data Flow
 
 - **Periodic publish**: Every `INTERVAL` seconds, commands listed in `COMMANDS` are grouped (max `MAX_LENGTH` characters per `vclient` call) and their JSON output is flattened into MQTT topics `${MQTT_TOPIC}/command/<command>` with the numeric value as the payload.
-- **Request/response (opt-in)**: When `MQTT_SUBSCRIBE=true`, the container listens on `${MQTT_TOPIC}/request`. Each incoming payload is treated as a `vclient` command; the JSON response is written to `${MQTT_TOPIC}/response`.
+- **Request/response (opt-in)**: When `MQTT_SUBSCRIBE=true`, the container listens on `${MQTT_TOPIC}/request`. Each incoming payload is treated as a `vclient` command; the JSON response is written to `${MQTT_TOPIC}/response`. Multiple commands can be sent in a single request using comma-separated format.
+
+### Multiple Commands in a Single Request
+
+Send multiple commands at once by separating them with commas:
+
+```bash
+# Single command
+mosquitto_pub -t "vcontrold/request" -m "getTempWWObenIst"
+# Response: {"getTempWWObenIst":{"value":48.1}}
+
+# Multiple commands
+mosquitto_pub -t "vcontrold/request" -m "getTempWWObenIst,getTempWWsoll"
+# Response: {"getTempWWObenIst":{"value":48.1},"getTempWWsoll":{"value":50}}
+
+# Write commands
+mosquitto_pub -t "vcontrold/request" -m "set1xWW 2,setTempWWsoll 50"
+# Response: {"set1xWW":{"value":"OK"},"setTempWWsoll":{"value":"OK"}}
+```
+
+**Error handling**: Errors are returned as vclient outputs them. For invalid commands, vclient outputs error messages on stderr which are included in the response.
 
 ## Configuration & Environment Variables
 

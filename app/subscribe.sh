@@ -22,11 +22,13 @@ while true; do
             echo "Debug: Received MQTT request: $payload"
         fi
 
-        # Capture output, don't crash on error
-        if response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j 2>/dev/null); then
+        # Capture both stdout and stderr, always publish the response
+        response=$(vclient -h 127.0.0.1:3002 -c "${payload}" -j 2>&1)
+
+        if [ -n "$response" ]; then
             /app/publish.sh "response" <<< "$response"
         else
-            echo "Error executing command: $payload"
+            echo "Error: No response for command: $payload"
         fi
     done
 
