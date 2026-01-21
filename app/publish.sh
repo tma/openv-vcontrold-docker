@@ -15,7 +15,7 @@ if [ "${DEBUG:-false}" = true ]; then
 fi
 
 MOSQUITTO_TIMEOUT="${MQTT_TIMEOUT:-10}"
-MOSQUITTO_BIN=(mosquitto_pub "${MOSQUITTO_ARGS[@]}" -t "$FULL_TOPIC" -m "$PAYLOAD" -V "mqttv5")
+MOSQUITTO_BIN=(mosquitto_pub "${MOSQUITTO_ARGS[@]}" -t "$FULL_TOPIC" -m "$PAYLOAD" -V "mqttv5" --retain)
 
 if command -v timeout >/dev/null 2>&1; then
   timeout --foreground "${MOSQUITTO_TIMEOUT}s" "${MOSQUITTO_BIN[@]}"
