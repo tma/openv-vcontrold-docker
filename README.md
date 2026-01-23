@@ -1,3 +1,5 @@
+**Deprecated in favor of new version keeping permanent connections, see [vcontrold-mqttd](https://github.com/tma/vcontrold-mqttd).**
+
 # vcontrold Docker — Viessmann Heating Controller with MQTT
 
 Containerized build of [openv/vcontrold](https://github.com/openv/vcontrold) with optional MQTT telemetry so you can query a Viessmann heating controller from any machine that runs Docker. The image bundles vcontrold, the Viessmann XML definitions, and helper scripts for scheduled polls as well as on-demand requests over MQTT.
